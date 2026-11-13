@@ -5,6 +5,9 @@ const csv = require('csv-parser');
 const app = express();
 const PORT = 3300;
 
+// Muudab JSON-vastuse ilusaks ja trepituks (Pretty Print)
+app.set('json spaces', 2);
+
 // In-memory storage
 let spareParts = [];
 let csvLoaded = false;
@@ -24,9 +27,18 @@ const COLUMNS = {
   price2: 10       // "109"
 };
 
+// Helper: Convert price string ("90,833") to float (90.833)
+function parsePrice(priceStr) {
+  if (!priceStr) return 0;
+  const cleaned = String(priceStr).replace(',', '.').trim();
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
 // Load CSV on server start
 function loadCSV() {
-  const readStream = fs.createReadStream('./projekt/data/LE.txt');
+  // Using 'latin1' encoding to fix broken Estonian characters (ü, ä, ö)
+  const readStream = fs.createReadStream('./projekt/data/LE.txt', { encoding: 'latin1' });
   
   readStream
     .pipe(csv({ 
@@ -34,17 +46,14 @@ function loadCSV() {
       headers: false          // No header row
     }))
     .on('data', (row) => {
-      // Convert row object to array for easier access
       const rowArray = Object.values(row);
       
       const sparePart = {
-        sn: rowArray[COLUMNS.sn],
-        name: rowArray[COLUMNS.name],
-        price: rowArray[COLUMNS.price],
-        manufacturer: rowArray[COLUMNS.manufacturer],
-        price2: rowArray[COLUMNS.price2],
-        // Add all other columns if needed
-        raw: rowArray
+        sn: (rowArray[COLUMNS.sn] || '').trim(),
+        name: (rowArray[COLUMNS.name] || '').trim(),
+        price: parsePrice(rowArray[COLUMNS.price]),
+        manufacturer: (rowArray[COLUMNS.manufacturer] || '').trim(),
+        price2: parsePrice(rowArray[COLUMNS.price2])
       };
       
       spareParts.push(sparePart);
@@ -81,13 +90,20 @@ function sortData(data, sortBy) {
   const sorted = [...data].sort((a, b) => {
     const aVal = a[column];
     const bVal = b[column];
+
+    // Handle missing/undefined columns safely
+    if (aVal === undefined || bVal === undefined) return 0;
     
-    // Try to convert to number
-    const aNum = !isNaN(aVal) ? parseFloat(aVal) : aVal;
-    const bNum = !isNaN(bVal) ? parseFloat(bVal) : bVal;
+    // Numeric comparison (for price, price2)
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return descending ? bVal - aVal : aVal - bVal;
+    }
     
-    if (aNum < bNum) return descending ? 1 : -1;
-    if (aNum > bNum) return descending ? -1 : 1;
+    // String comparison (for name, sn, manufacturer)
+    const aStr = String(aVal).toLowerCase();
+    const bStr = String(bVal).toLowerCase();
+    if (aStr < bStr) return descending ? 1 : -1;
+    if (aStr > bStr) return descending ? -1 : 1;
     return 0;
   });
   
@@ -131,7 +147,7 @@ app.get('/spare-parts', (req, res) => {
   res.json(paginated);
 });
 
-// GET /spare-parts/:id - Get single part by sn
+// GET /spare-parts/:sn - Get single part by sn
 app.get('/spare-parts/:sn', (req, res) => {
   if (!csvLoaded) {
     return res.status(503).json({ error: 'CSV still loading...' });
